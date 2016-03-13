@@ -1,15 +1,6 @@
-// #generate server keypair
-// ssh-keygen -t rsa
-// go get -v .
-// go run sshd.go
-//
-// Client:
-// ssh foo@localhost -p 2200 #pass=bar
-
-package main
+package easyssh
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io/ioutil"
@@ -17,58 +8,28 @@ import (
 	"net"
 
 	"github.com/nu7hatch/gouuid"
-
 	"golang.org/x/crypto/ssh"
 )
 
-type clientHandler func(client sshClient)
+type clientHandler func(client SshClient)
 type ScreenSize struct {
-	width, height uint32
-}
-type sshClient struct {
-	channel ssh.Channel
-	resizes chan ScreenSize
-	id      *uuid.UUID
+	Width, Height uint32
 }
 
-func (c *sshClient) Disconnect() {
-	log.Printf("Client %s hanging up", c.id)
-	c.channel.Write([]byte("bye\n\r"))
-	c.channel.Close()
+type SshClient struct {
+	Channel ssh.Channel
+	Resizes chan ScreenSize
+	Id      *uuid.UUID
 }
 
-func main() {
-	newClientHandler := func(client sshClient) {
-		message := fmt.Sprintf("welcome, id: %s\n\r", client.id)
-		client.channel.Write([]byte(message))
-
-		// handle resizes
-		go func() {
-			for size := range client.resizes {
-				message := fmt.Sprintf("resize to %d x %d\n\r", size.width, size.height)
-				client.channel.Write([]byte(message))
-			}
-		}()
-
-		// handle incoming bytes
-		go func() {
-			ctrlC, ctrlD := []byte{3}, []byte{4}
-			buff := make([]byte, 3)
-			for {
-				n, _ := client.channel.Read(buff)
-				received := buff[:n]
-				if bytes.Equal(received, ctrlC) || bytes.Equal(received, ctrlD) {
-					client.Disconnect()
-				}
-			}
-		}()
-
-	}
-	startSshServer(2200, newClientHandler)
+func (c *SshClient) Disconnect() {
+	log.Printf("Client %s hanging up", c.Id)
+	c.Channel.Write([]byte("bye\n\r"))
+	c.Channel.Close()
 }
 
-func startSshServer(port int, clientHandler clientHandler) {
-	config := buildSshConfig()
+func WaitForClients(port int, keypath string, clientHandler clientHandler) {
+	config := buildSshConfig(keypath)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
@@ -122,9 +83,9 @@ func handleChannel(newChannel ssh.NewChannel, clientHandler clientHandler) {
 
 	resizes := make(chan ScreenSize)
 	id, _ := uuid.NewV4()
-	client := sshClient{connection, resizes, id}
+	client := SshClient{connection, resizes, id}
 
-	log.Printf("Client %s connected", client.id)
+	log.Printf("Client %s connected", client.Id)
 
 	go func() {
 		clientHandler(client)
@@ -157,14 +118,14 @@ func parseDims(b []byte) ScreenSize {
 	return ScreenSize{w, h}
 }
 
-func buildSshConfig() *ssh.ServerConfig {
+func buildSshConfig(keypath string) *ssh.ServerConfig {
 	config := &ssh.ServerConfig{
 		NoClientAuth: true,
 	}
 
-	privateBytes, err := ioutil.ReadFile("id_rsa")
+	privateBytes, err := ioutil.ReadFile(keypath)
 	if err != nil {
-		log.Fatal("Failed to load private key (./id_rsa)")
+		log.Fatalf("Failed to load private key (%s)", keypath)
 	}
 
 	private, err := ssh.ParsePrivateKey(privateBytes)
