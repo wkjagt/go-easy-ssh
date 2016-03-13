@@ -1,7 +1,3 @@
-// A small SSH daemon providing bash sessions
-//
-// Server:
-// cd my/new/dir/
 // #generate server keypair
 // ssh-keygen -t rsa
 // go get -v .
