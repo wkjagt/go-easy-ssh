@@ -21,6 +21,12 @@ type SshClient struct {
 	Id      *uuid.UUID
 }
 
+func newClient(connection ssh.Channel) *SshClient {
+	resizes := make(chan *ScreenSize)
+	id, _ := uuid.NewV4()
+	return &SshClient{connection, resizes, id}
+}
+
 func (c *SshClient) Write(m string) {
 	c.Channel.Write([]byte(m))
 }
@@ -35,7 +41,7 @@ func (c *SshClient) Disconnect() {
 	c.Channel.Close()
 }
 
-func WaitForClients(port int, key []byte, clientHandler clientHandler) {
+func StartServer(port int, key []byte, clientHandler clientHandler) {
 	config := buildSshConfig(key)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
@@ -52,30 +58,26 @@ func WaitForClients(port int, key []byte, clientHandler clientHandler) {
 			log.Printf("Failed to accept incoming connection (%s)", err)
 			continue
 		}
+		upgradeToSsh(tcpConn, config, clientHandler)
+	}
+}
 
-		sshConn, chans, reqs, err := ssh.NewServerConn(tcpConn, config)
-		if err != nil {
-			log.Printf("Failed to handshake (%s)", err)
-			continue
+func upgradeToSsh(tcpConn net.Conn, config *ssh.ServerConfig, clientHandler clientHandler) {
+	sshConn, chans, reqs, err := ssh.NewServerConn(tcpConn, config)
+
+	if err != nil {
+		log.Printf("Failed to handshake (%s)", err)
+		return
+	}
+
+	log.Printf("New SSH connection from %s", sshConn.RemoteAddr())
+
+	go ssh.DiscardRequests(reqs)
+	go func() {
+		for newChannel := range chans {
+			go handleChannel(newChannel, clientHandler)
 		}
-
-		log.Printf("New SSH connection from %s]", sshConn.RemoteAddr())
-
-		go ssh.DiscardRequests(reqs)
-		go handleChannels(chans, clientHandler)
-	}
-}
-
-func handleChannels(chans <-chan ssh.NewChannel, clientHandler clientHandler) {
-	for newChannel := range chans {
-		go handleChannel(newChannel, clientHandler)
-	}
-}
-
-func newClient(connection ssh.Channel) *SshClient {
-	resizes := make(chan *ScreenSize)
-	id, _ := uuid.NewV4()
-	return &SshClient{connection, resizes, id}
+	}()
 }
 
 func handleChannel(newChannel ssh.NewChannel, clientHandler clientHandler) {
